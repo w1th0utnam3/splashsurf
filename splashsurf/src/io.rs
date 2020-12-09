@@ -4,8 +4,9 @@ use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 
 use anyhow::{anyhow, Context};
-use ply_rs as ply;
-use ply_rs::ply::Property;
+use ply_rs;
+use ply_rs::ply;
+
 use splashsurf_lib::nalgebra::Vector3;
 use vtkio::model::{DataSet, Version, Vtk};
 use vtkio::{export_be, import_be};
@@ -140,42 +141,34 @@ pub fn particles_from_xyz<R: Real, P: AsRef<Path>>(
 pub fn particles_from_ply<R: Real, P: AsRef<Path>>(
     ply_file: P,
 ) -> Result<Vec<Vector3<R>>, anyhow::Error> {
-    let mut ply_file = std::fs::File::open(ply_file).unwrap();
-    let parser = ply::parser::Parser::<ply::ply::DefaultElement>::new();
+    let ply_file = File::open(ply_file).context("Failed to open Ply file")?;
+    let mut ply_file = std::io::BufReader::new(ply_file);
 
-    let ply = parser
-        .read_ply(&mut ply_file)
-        .context("Failed to read PLY file")?;
-    let elements = ply
-        .payload
-        .get("vertex")
-        .ok_or(anyhow!("PLY file is missing a 'vertex' element"))?;
+    let vertex_parser = ply_rs::parser::Parser::<Vec3r>::new();
+    let header = vertex_parser.read_header(&mut ply_file).unwrap();
 
-    let particles = elements
-        .into_iter()
-        .map(|e| {
-            let vertex = (
-                e.get("x").unwrap(),
-                e.get("y").unwrap(),
-                e.get("z").unwrap(),
-            );
+    let mut particles_ply = Vec::new();
 
-            let v = match vertex {
-                (Property::Float(x), Property::Float(y), Property::Float(z)) => Vector3::new(
-                    R::from_f32(*x).unwrap(),
-                    R::from_f32(*y).unwrap(),
-                    R::from_f32(*z).unwrap(),
-                ),
-                _ => {
-                    return Err(anyhow!(
-                        "Vertex properties have wrong PLY data type (expected float)"
-                    ))
-                }
-            };
+    for (_, element) in &header.elements {
+        match element.name.as_ref() {
+            "vertex" => {
+                particles_ply = vertex_parser
+                    .read_payload_for_element(&mut ply_file, &element, &header)
+                    .context("Could not load vertex payload")?;
+            }
+            _ => (),
+        }
+    }
 
-            Ok(v)
-        })
-        .collect::<Result<Vec<_>, anyhow::Error>>()?;
+    let mut particles = Vec::new();
+
+    for particle in particles_ply {
+        particles.push(Vector3::new(
+            R::from_f32(particle.0.x).unwrap(),
+            R::from_f32(particle.0.y).unwrap(),
+            R::from_f32(particle.0.z).unwrap(),
+        ));
+    }
 
     Ok(particles)
 }
@@ -192,4 +185,23 @@ pub fn to_binary_f32<R: Real, P: AsRef<Path>>(file: P, values: &[R]) -> Result<(
     }
 
     Ok(())
+}
+
+// #[repr(transparent)]
+struct Vec3r(Vector3<f32>);
+
+impl ply::PropertyAccess for Vec3r {
+    fn new() -> Self {
+        Self {
+            0: { Vector3::new(0.0, 0.0, 0.0) },
+        }
+    }
+    fn set_property(&mut self, key: String, property: ply::Property) {
+        match (key.as_ref(), property) {
+            ("x", ply::Property::Float(v)) => self.0.x = v,
+            ("y", ply::Property::Float(v)) => self.0.y = v,
+            ("z", ply::Property::Float(v)) => self.0.z = v,
+            _ => (),
+        }
+    }
 }

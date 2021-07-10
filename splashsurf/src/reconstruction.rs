@@ -606,12 +606,11 @@ pub(crate) fn reconstruction_pipeline_generic<I: Index, R: Real>(
             "Writing surface mesh to \"{}\"...",
             paths.output_file.to_string_lossy()
         );
-        io::vtk_format::write_vtk(&mesh, &paths.output_file, "mesh").with_context(|| {
-            format!(
-                "Failed to write reconstructed surface to output file '{}'",
-                paths.output_file.to_string_lossy()
-            )
-        })?;
+
+        let io_params = io::FormatParameters::default();
+
+        io::write_mesh(&mesh, paths.output_file.clone(), &io_params.output)?;
+
         info!("Done.");
     }
 

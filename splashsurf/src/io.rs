@@ -1,9 +1,12 @@
 use anyhow::{anyhow, Context};
 use log::info;
-use splashsurf_lib::mesh::{Mesh3d, MeshWithData, TriMesh3d};
 use splashsurf_lib::nalgebra::Vector3;
 use splashsurf_lib::profile;
 use splashsurf_lib::Real;
+use splashsurf_lib::{
+    mesh::{Mesh3d, MeshWithData, TriMesh3d},
+    vtkio::model::DataSet,
+};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -167,11 +170,14 @@ pub fn read_surface_mesh<R: Real, P: AsRef<Path>>(
 }
 
 /// Writes a mesh to the given file path, automatically detects the file format
-pub fn write_mesh<R: Real, M: Mesh3d<R>, P: AsRef<Path>>(
-    mesh: &MeshWithData<R, M>,
+pub fn write_mesh<'a, R: Real, MeshT: Mesh3d<R>, P: AsRef<Path>>(
+    mesh: &'a MeshWithData<R, MeshT>,
     output_file: P,
     _format_params: &OutputFormatParameters,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), anyhow::Error>
+where
+    &'a MeshWithData<R, MeshT>: Into<DataSet>,
+{
     let output_file = output_file.as_ref();
     info!(
         "Writing mesh with {} vertices and {} cells to \"{}\"...",
@@ -188,11 +194,27 @@ pub fn write_mesh<R: Real, M: Mesh3d<R>, P: AsRef<Path>>(
             .ok_or(anyhow!("Invalid extension of output file"))?;
 
         match extension.to_lowercase().as_str() {
-            "obj" => obj_format::mesh_to_obj(mesh, &output_file)?,
+            "vtk" => {
+                vtk_format::write_vtk(mesh, &output_file, "mesh").with_context(|| {
+                    format!(
+                        "Failed to write reconstructed surface to output file '{}'",
+                        output_file.to_string_lossy()
+                    )
+                })?;
+            }
+            "obj" => {
+                obj_format::mesh_to_obj(mesh, &output_file).with_context(|| {
+                    format!(
+                        "Failed to write reconstructed surface to output file '{}'",
+                        output_file.to_string_lossy()
+                    )
+                })?;
+            }
             _ => {
                 return Err(anyhow!(
-                    "Unsupported file format extension \"{}\" for writing meshes",
-                    extension
+                    "Unsupported file format extension \"{}\" for writing mesh to output file '{}'",
+                    extension,
+                    output_file.to_string_lossy(),
                 ));
             }
         }
